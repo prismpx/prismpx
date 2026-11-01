@@ -509,3 +509,265 @@ pub(super) fn encode_best(img: &Image, parsed: &Parsed, opts: &Options) -> (Vec<
     }
     best.expect("at least one candidate")
 }
+
+// ---------------------------------------------------------------------------
+// Near-lossless encoding
+//
+// JPEG-LS style bounded-error coding (Weinberger, Seroussi, Sapiro, "The
+// LOCO-I lossless image compression algorithm", IEEE TIP 2000, near-lossless
+// mode) adapted to PNG's filter loop: each filter residual is quantized to a
+// multiple of 2·delta+1 while the encoder tracks the reconstructed pixels, so
+// every sample decodes to within ±delta of the original and the residual
+// alphabet shrinks dramatically, which DEFLATE rewards. Any standard PNG
+// decoder reads the result; no special decoder is needed.
+// ---------------------------------------------------------------------------
+
+/// A near-lossless filtered image, ready to compress.
+pub(super) struct NearLossless {
+    target: Target,
+    filtered: Vec<u8>,
+    /// What a decoder will reconstruct.
+    pub recon: Image,
+    /// Human-readable description of the error bounds.
+    pub label: String,
+}
+
+#[inline]
+fn predict(ft: u8, a: u8, b: u8, c: u8) -> u8 {
+    match ft {
+        0 => 0,
+        1 => a,
+        2 => b,
+        3 => ((a as u16 + b as u16) / 2) as u8,
+        _ => filter::paeth(a, b, c),
+    }
+}
+
+/// Quantizes one row with filter `ft`. `tol[i]` is the allowed error for byte i
+/// (0 = exact, 255 = any value). Writes residual bytes and the reconstruction.
+fn quantize_row(
+    ft: u8,
+    cur: &[u8],
+    prev: &[u8],
+    bpp: usize,
+    tol: &[u8],
+    res: &mut Vec<u8>,
+    rec: &mut [u8],
+) {
+    res.clear();
+    for i in 0..cur.len() {
+        let a = if i >= bpp { rec[i - bpp] } else { 0 };
+        let b = prev[i];
+        let c = if i >= bpp { prev[i - bpp] } else { 0 };
+        let pred = predict(ft, a, b, c) as i32;
+        let x = cur[i] as i32;
+        let r = x - pred;
+        let q = match tol[i] {
+            0 => r,
+            255 => 0,
+            d => {
+                let d = d as i32;
+                let step = 2 * d + 1;
+                let mut q = (r as f32 / step as f32).round() as i32 * step;
+                if pred + q < 0 {
+                    q += step;
+                }
+                if pred + q > 255 {
+                    q -= step;
+                }
+                if (pred + q - x).abs() > d || !(0..=255).contains(&(pred + q)) {
+                    r
+                } else {
+                    q
+                }
+            }
+        };
+        rec[i] = (pred + q) as u8;
+        res.push(q as u8);
+    }
+}
+
+fn minsum(row: &[u8]) -> u64 {
+    row.iter().map(|&b| (b as i8).unsigned_abs() as u64).sum()
+}
+
+/// Filters `img` (8-bit) with residual quantization: every color sample
+/// decodes to within ±`delta`. Alpha is kept exact; color under fully
+/// transparent pixels is free.
+pub(super) fn near_lossless(img: &Image, delta: u8) -> NearLossless {
+    debug_assert!(!img.bit16);
+    let gray = img.px.chunks_exact(4).all(|p| p[0] == p[1] && p[1] == p[2]);
+    let opaque = img.px.chunks_exact(4).all(|p| p[3] == 255);
+    let target = match (gray, opaque) {
+        (true, true) => Target::Gray {
+            depth: 8,
+            key: None,
+        },
+        (true, false) => Target::GrayAlpha { depth: 8 },
+        (false, true) => Target::Rgb {
+            depth: 8,
+            key: None,
+        },
+        (false, false) => Target::Rgba { depth: 8 },
+    };
+    let ch = target.channels();
+    let (raw, row_len, bpp) = pack(img, &target);
+    let (w, h) = (img.width as usize, img.height as usize);
+
+    let mut filtered = Vec::with_capacity(h * (row_len + 1));
+    let mut prev = vec![0u8; row_len];
+    let mut tol = vec![0u8; row_len];
+    let mut best_res = Vec::with_capacity(row_len);
+    let mut best_rec = vec![0u8; row_len];
+    let mut res = Vec::with_capacity(row_len);
+    let mut rec = vec![0u8; row_len];
+    let mut recon_rows = vec![0u8; h * row_len];
+
+    for y in 0..h {
+        let cur = &raw[y * row_len..(y + 1) * row_len];
+        for x in 0..w {
+            let alpha = if opaque { 255 } else { cur[x * ch + ch - 1] };
+            for c in 0..ch {
+                tol[x * ch + c] = if !opaque && c == ch - 1 {
+                    0
+                } else if alpha == 0 {
+                    255
+                } else {
+                    delta.min(254)
+                };
+            }
+        }
+        let mut best_score = u64::MAX;
+        let mut best_ft = 0;
+        for ft in 0..5u8 {
+            quantize_row(ft, cur, &prev, bpp, &tol, &mut res, &mut rec);
+            let s = minsum(&res);
+            if s < best_score {
+                best_score = s;
+                best_ft = ft;
+                std::mem::swap(&mut best_res, &mut res);
+                best_rec.copy_from_slice(&rec);
+            }
+        }
+        filtered.push(best_ft);
+        filtered.extend_from_slice(&best_res);
+        recon_rows[y * row_len..(y + 1) * row_len].copy_from_slice(&best_rec);
+        prev.copy_from_slice(&best_rec);
+    }
+
+    let mut px = Vec::with_capacity(w * h * 4);
+    for y in 0..h {
+        for x in 0..w {
+            let s = &recon_rows[y * row_len + x * ch..y * row_len + (x + 1) * ch];
+            let v = |i: usize| s[i] as u16;
+            px.extend_from_slice(&match ch {
+                1 => [v(0), v(0), v(0), 255],
+                2 => [v(0), v(0), v(0), v(1)],
+                3 => [v(0), v(1), v(2), 255],
+                _ => [v(0), v(1), v(2), v(3)],
+            });
+        }
+    }
+    NearLossless {
+        target,
+        filtered,
+        recon: Image {
+            width: img.width,
+            height: img.height,
+            bit16: false,
+            px,
+        },
+        label: format!("max error ±{delta}"),
+    }
+}
+
+/// Compresses and assembles a near-lossless image into a PNG.
+pub(super) fn finish_near_lossless(
+    nl: &NearLossless,
+    parsed: &Parsed,
+    opts: &Options,
+) -> (Vec<u8>, String) {
+    let (_, level, level_name) = levels(opts.effort);
+    let idat = zlib_compress(&nl.filtered, &level);
+    let orig = &parsed.ihdr;
+    let type_changed = (nl.target.color_type(), nl.target.depth()) != (orig.color, orig.depth);
+    let kept: Vec<&Chunk> = parsed
+        .ancillary
+        .iter()
+        .filter(|c| keep_chunk(&c.kind, opts.metadata, type_changed))
+        .collect();
+    let png = assemble(&nl.recon, &nl.target, &idat, &kept);
+    let desc = format!(
+        "png: {} -> {}, near-lossless ({}), deflate={level_name}",
+        describe_ihdr(orig),
+        nl.target.describe(),
+        nl.label
+    );
+    (png, desc)
+}
+
+#[cfg(test)]
+mod near_lossless_tests {
+    use super::*;
+
+    fn test_image(w: u32, h: u32, alpha: bool) -> Image {
+        let mut rng = 12345u32;
+        let mut next = || {
+            rng ^= rng << 13;
+            rng ^= rng >> 17;
+            rng ^= rng << 5;
+            rng
+        };
+        let mut px = Vec::new();
+        for y in 0..h {
+            for x in 0..w {
+                let n = (next() % 9) as i32 - 4;
+                let base = [(x * 5 + y) as i32, (y * 7) as i32, ((x + y) * 3) as i32];
+                let a = if !alpha { 255 } else if (x + y) % 7 == 0 { 0 } else { (next() % 256) as u16 };
+                px.extend(base.iter().map(|&v| (v + n).clamp(0, 255) as u16));
+                px.push(a);
+            }
+        }
+        Image { width: w, height: h, bit16: false, px }
+    }
+
+    #[test]
+    fn error_is_bounded_and_alpha_exact() {
+        for alpha in [false, true] {
+            let img = test_image(41, 23, alpha);
+            for delta in [1u8, 3, 8, 20] {
+                let nl = near_lossless(&img, delta);
+                for (o, r) in img.px.chunks_exact(4).zip(nl.recon.px.chunks_exact(4)) {
+                    assert_eq!(o[3], r[3], "alpha must be exact");
+                    if o[3] == 0 {
+                        continue; // color under transparent pixels is free
+                    }
+                    for c in 0..3 {
+                        let e = (o[c] as i32 - r[c] as i32).abs();
+                        assert!(e <= delta as i32, "error {e} > {delta}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn filtered_stream_reconstructs_exactly() {
+        // Decode the filtered stream with the PNG unfilter routine and compare
+        // with the encoder's own reconstruction.
+        let img = test_image(33, 17, false);
+        let nl = near_lossless(&img, 4);
+        let row_len = 33 * 3;
+        let mut prev = vec![0u8; row_len];
+        for y in 0..17 {
+            let start = y * (row_len + 1);
+            let mut row = nl.filtered[start + 1..start + 1 + row_len].to_vec();
+            assert!(filter::unfilter_row(nl.filtered[start], &mut row, &prev, 3));
+            for x in 0..33 {
+                let r = &nl.recon.px[(y * 33 + x) * 4..][..3];
+                assert_eq!(&row[x * 3..x * 3 + 3], &[r[0] as u8, r[1] as u8, r[2] as u8]);
+            }
+            prev = row;
+        }
+    }
+}

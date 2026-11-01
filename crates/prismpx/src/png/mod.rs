@@ -120,6 +120,9 @@ pub(crate) fn optimize(input: &[u8], opts: &Options) -> Result<(Vec<u8>, String)
     }
 }
 
+/// Error bounds (in 8-bit sample units) tried by the near-lossless search.
+const NEAR_LOSSLESS_DELTAS: [u8; 12] = [1, 2, 3, 4, 5, 6, 8, 10, 12, 14, 16, 20];
+
 /// Palette sizes tried, smallest first.
 const PALETTE_SIZES: [usize; 13] = [2, 4, 8, 12, 16, 24, 32, 48, 64, 96, 128, 192, 256];
 
@@ -212,6 +215,48 @@ fn optimize_lossy(
                 if dither > 0.0 { ", dithered" } else { "" }
             );
             consider(&img, label, s)?;
+        }
+    }
+
+    // Near-lossless: the largest uniform error bound that meets the target.
+    // (A texture-adaptive bound was tried and lost: flat-but-noisy photo
+    // regions are where the bits are, and mixed step sizes hurt DEFLATE.)
+    let search = || -> Result<Option<(encode::NearLossless, f64)>> {
+        let (mut lo, mut hi) = (0usize, NEAR_LOSSLESS_DELTAS.len());
+        let mut found = None;
+        while lo < hi {
+            let mid = (lo + hi) / 2;
+            let d = NEAR_LOSSLESS_DELTAS[mid];
+            let nl = encode::near_lossless(&base, d);
+            let s = reference.score(&nl.recon)?;
+            if s >= target {
+                found = Some((nl, s));
+                lo = mid + 1;
+            } else {
+                hi = mid;
+            }
+        }
+        Ok(found)
+    };
+    if let Some((nl, s)) = search()? {
+        let (png, d) = encode::finish_near_lossless(&nl, parsed, opts);
+        if opts.verify {
+            let back = decode(&png)
+                .map_err(|e| Error::VerificationFailed(format!("output does not decode: {e}")))?;
+            if back.to_rgba16() != nl.recon.to_rgba16() {
+                return Err(Error::VerificationFailed(
+                    "near-lossless output differs from its reconstruction".into(),
+                ));
+            }
+        }
+        if png.len() < best.png.len() {
+            best = Candidate {
+                png,
+                description: format!(
+                    "{d}; lossy: {}, ssimulacra2={s:.2} (target {target})",
+                    nl.label
+                ),
+            };
         }
     }
     Ok((best.png, best.description))
