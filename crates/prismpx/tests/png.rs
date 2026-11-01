@@ -182,11 +182,10 @@ fn jpeg_is_optimized_through_the_public_api() {
     let r = optimize(&data, &Options::default()).unwrap();
     assert_eq!(r.format, prismpx::Format::Jpeg);
     assert!(r.optimized && r.size() < data.len(), "{}", r.strategy);
-    // Visually-lossless mode falls back to lossless JPEG optimization for now.
     let v = optimize(
         &data,
         &Options::default().with_mode(prismpx::Mode::VisuallyLossless),
     )
     .unwrap();
-    assert_eq!(v.data, r.data);
+    assert!(v.size() <= r.size(), "{}", v.strategy);
 }

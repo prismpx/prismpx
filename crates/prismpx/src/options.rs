@@ -5,7 +5,7 @@ pub enum Mode {
     #[default]
     Lossless,
     /// Pixels may change, as long as the SSIMULACRA2 score against the
-    /// original stays at or above [`Options::quality`]. PNG only for now.
+    /// original stays at or above [`Options::quality`].
     VisuallyLossless,
 }
 

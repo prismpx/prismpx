@@ -10,7 +10,7 @@ prismpx is a same-format image optimizer: a PNG or JPEG goes in, a smaller file 
 
 It is written in dependency-free Rust with a C ABI, so it can be wrapped for any language.
 
-> Status: early. PNG works in both modes; JPEG in lossless mode. See the [roadmap](#roadmap).
+> Status: early. PNG and JPEG work in both modes. See the [roadmap](#roadmap).
 
 ## Results
 
@@ -26,9 +26,19 @@ It is written in dependency-free Rust with a C ABI, so it can be wrapped for any
 
 Every lossy output met its SSIMULACRA 2 target.
 
-40 real-world JPEGs (3.63 MB), lossless: **8.0% smaller** with the default metadata
-policy (7.0% from re-encoding alone). Every output decodes with libjpeg to exactly
-the same pixels as its input.
+40 real-world JPEGs (3.63 MB, already web-compressed):
+
+| Mode | Saved |
+|---|---|
+| lossless (pixel-identical under libjpeg) | 8.0% |
+| `--lossy -q 90` | 11.0% |
+| `--lossy -q 85` (default) | 21.6% |
+| `--lossy -q 80` | 32.1% |
+
+High-quality sources save more: five photos saved at JPEG quality 95 shrink by
+31.4% at `-q 85`. JPEG scores compare against the decoded input, so an
+already heavily compressed JPEG may have no headroom; it is then optimized
+losslessly.
 
 ## What it does (PNG)
 
@@ -55,6 +65,18 @@ Animated PNG (APNG) is detected and left untouched for now.
 | Safety | the output is decoded again and its coefficients compared with the input's |
 
 Arithmetic-coded, lossless (SOF3), hierarchical and 12-bit JPEGs are reported as unsupported.
+
+## What it does (JPEG, visually lossless)
+
+| Step | Technique |
+|---|---|
+| No pixel round trip | everything happens on the quantized DCT coefficients, so there is no second generation of blocking and ringing |
+| Requantization | quantization steps are scaled up with a frequency weighting (larger for high frequencies, after Watson's DCTune), and every coefficient is re-rounded from its exact dequantized value. Chroma tables are scaled harder for 4:4:4 images |
+| Rate-weighted zeroing | ±1 coefficients after long zero runs are dropped when their distortion is small relative to their estimated bit cost (a simplified rate-distortion decision in the spirit of trellis quantization). Plain requantization and requantization with zeroing are both searched |
+| Quality control | the image is rendered (float IDCT, fancy upsampling, JFIF color) and scored with SSIMULACRA 2 against the rendered input; the strength is bisected to the largest value that meets the target |
+| Encoding | the candidate goes through the lossless JPEG encoder (optimal Huffman tables, baseline or progressive); the lossless result is kept if it is smaller |
+
+CMYK/YCCK JPEGs and files that redefine quantization tables mid-stream are optimized losslessly only.
 
 ## What it does (PNG, visually lossless)
 
@@ -144,8 +166,7 @@ by an independent Python encoder, not by prismpx itself.
 - PNG: Zopfli-style optimal LZ77 parsing; faster perceptual search; rate-aware
   residual selection in near-lossless mode
 - JPEG lossless: progressive scans with successive approximation (mozjpeg-style scan search)
-- JPEG visually lossless: trellis quantization, perceptual quantization tables,
-  DCT-domain requantization
+- JPEG visually lossless: full trellis quantization with a real rate model; faster search
 - WebP
 - Bindings: Java, Python, Node, WASM, Swift/Kotlin
 

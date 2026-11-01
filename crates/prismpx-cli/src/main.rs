@@ -11,7 +11,7 @@ USAGE:
     prismpx [OPTIONS] <FILE>...
     prismpx score <ORIGINAL> <DISTORTED>   Print the SSIMULACRA2 score (PNG inputs)
 
-Inputs may be PNG or JPEG. JPEG is optimized losslessly in every mode.
+Inputs may be PNG or JPEG.
 
 Without --output or --in-place, runs as a dry run and only reports savings.
 

@@ -13,16 +13,16 @@
 //! [`Mode::VisuallyLossless`] trades invisible changes for much smaller files,
 //! guided by the SSIMULACRA2 perceptual metric (see [`metrics`]).
 //!
-//! Status: PNG is implemented in both modes; JPEG is optimized losslessly
-//! (in visually-lossless mode too, for now).
+//! Status: PNG and JPEG are implemented in both modes.
 
 mod checksum;
 mod color;
 pub mod deflate;
 mod error;
-mod jpeg;
+pub mod jpeg;
 pub mod metrics;
 mod options;
+mod parallel;
 pub mod png;
 
 pub use error::{Error, Result};
