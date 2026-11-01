@@ -10,12 +10,21 @@
 mod decode;
 mod encode;
 mod huffman;
+mod lossy;
 mod metadata;
+mod render;
 
 pub(crate) use decode::decode;
 
+/// Decodes a JPEG to 8-bit RGBA pixels (1- and 3-component images).
+pub fn render_pixels(data: &[u8]) -> Result<crate::png::Image> {
+    render::render(&decode(data)?)
+}
+
 use crate::error::{Error, Result};
+use crate::metrics::Reference;
 use crate::options::{Mode, Options};
+use crate::parallel::par_map;
 
 /// One image component as declared in the frame header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -111,6 +120,10 @@ pub(crate) struct Jpeg {
     pub dqt: Vec<Vec<u8>>,
     /// True if any quantization table uses 16-bit precision.
     pub dqt_16bit: bool,
+    /// Quantization tables by id, zigzag order (final definitions).
+    pub qtables: [Option<[u16; 64]>; 4],
+    /// True if a table id was redefined with different values mid-file.
+    pub qtables_redefined: bool,
     /// Quantized coefficients per component, zigzag order, padded storage.
     pub coeffs: Vec<Vec<[i16; 64]>>,
     /// Bytes after EOI (e.g. multi-picture extras).
@@ -135,20 +148,38 @@ impl Jpeg {
     }
 }
 
-pub(crate) fn optimize(input: &[u8], opts: &Options) -> Result<(Vec<u8>, String)> {
-    let jpeg = decode(input)?;
-    let (segments, meta_note) = metadata::filter(&jpeg.segments, opts.metadata);
-    let (out, layout) = encode::encode_best(&jpeg, &segments, opts.effort);
-
+/// Encodes `jpeg` and, if verification is on, checks that the output decodes
+/// to the same coefficients and quantization tables.
+fn encode_verified(
+    jpeg: &Jpeg,
+    segments: &[(u8, Vec<u8>)],
+    opts: &Options,
+) -> Result<(Vec<u8>, &'static str)> {
+    let (out, layout) = encode::encode_best(jpeg, segments, opts.effort);
     if opts.verify {
         let back = decode(&out)
             .map_err(|e| Error::VerificationFailed(format!("output does not decode: {e}")))?;
-        if !jpeg.same_image(&back) {
+        if !jpeg.same_image(&back) || jpeg.qtables != back.qtables {
             return Err(Error::VerificationFailed(
                 "output coefficients differ from input".into(),
             ));
         }
     }
+    Ok((out, layout))
+}
+
+/// Largest requantization strength tried.
+const MAX_STRENGTH: f32 = 4.0;
+/// Chroma table scaling relative to luma, for 4:4:4 images.
+const CHROMA_444: f32 = 2.5;
+/// Bisection steps for the strength search (resolution MAX_STRENGTH / 2^steps).
+const SEARCH_STEPS: usize = 6;
+
+pub(crate) fn optimize(input: &[u8], opts: &Options) -> Result<(Vec<u8>, String)> {
+    let jpeg = decode(input)?;
+    let (segments, meta_note) = metadata::filter(&jpeg.segments, opts.metadata);
+    let (out, layout) = encode_verified(&jpeg, &segments, opts)?;
+
     let mut desc = format!(
         "jpeg: {} -> {layout}, optimized Huffman tables",
         jpeg.frame.describe()
@@ -159,10 +190,74 @@ pub(crate) fn optimize(input: &[u8], opts: &Options) -> Result<(Vec<u8>, String)
     if jpeg.trailing > 0 {
         desc.push_str(&format!(", dropped {} bytes after EOI", jpeg.trailing));
     }
-    if opts.mode == Mode::VisuallyLossless {
-        desc.push_str(" (visually-lossless JPEG not implemented yet; lossless only)");
+    if opts.mode == Mode::Lossless {
+        return Ok((out, desc));
     }
-    Ok((out, desc))
+
+    let unsupported = if !matches!(jpeg.frame.comps.len(), 1 | 3) {
+        Some("CMYK/YCCK")
+    } else if jpeg.qtables_redefined {
+        Some("redefined quantization tables")
+    } else if jpeg.frame.width < 8 || jpeg.frame.height < 8 {
+        Some("image smaller than 8x8")
+    } else {
+        None
+    };
+    if let Some(why) = unsupported {
+        return Ok((out, format!("{desc}; lossy skipped ({why}), lossless only")));
+    }
+
+    let original = render::render(&jpeg)?;
+    let reference = Reference::new(&original)?;
+    let target = opts.quality as f64;
+    let score = |cand: &Jpeg| -> Result<f64> { reference.score(&render::render(cand)?) };
+    let full_chroma =
+        jpeg.frame.comps.len() == 3 && jpeg.frame.comps.iter().all(|c| c.h == 1 && c.v == 1);
+    let chroma = if full_chroma { CHROMA_444 } else { 1.0 };
+
+    // For plain requantization and requantization + rate-weighted zeroing,
+    // bisect for the largest strength that still meets the target.
+    let search = |&rdo: &bool| -> Result<Option<(Jpeg, f32, f64)>> {
+        let params = |strength: f32| lossy::Params {
+            strength,
+            rdo,
+            chroma,
+        };
+        let (mut lo, mut hi) = (0.0f32, MAX_STRENGTH);
+        let mut best: Option<(Jpeg, f32, f64)> = None;
+        for _ in 0..SEARCH_STEPS {
+            let mid = (lo + hi) / 2.0;
+            let cand = lossy::requantize(&jpeg, params(mid));
+            let s = score(&cand)?;
+            if s >= target {
+                best = Some((cand, mid, s));
+                lo = mid;
+            } else {
+                hi = mid;
+            }
+        }
+        Ok(best)
+    };
+    let mut best: (Vec<u8>, String) = (out, format!("{desc}; lossless was smallest"));
+    let modes = [false, true];
+    for (found, rdo) in par_map(&modes, search).into_iter().zip(modes) {
+        let Some((cand, strength, s)) = found? else {
+            continue;
+        };
+        let (bytes, layout) = encode_verified(&cand, &segments, opts)?;
+        if bytes.len() < best.0.len() {
+            let rdo = if rdo { " + rate-weighted zeroing" } else { "" };
+            best = (
+                bytes,
+                format!(
+                    "jpeg: {} -> {layout}, optimized Huffman tables{}; lossy: perceptual requantization (strength {strength:.2}){rdo}, ssimulacra2={s:.2} (target {target})",
+                    jpeg.frame.describe(),
+                    if meta_note.is_empty() { String::new() } else { format!(", {meta_note}") },
+                ),
+            );
+        }
+    }
+    Ok(best)
 }
 
 #[cfg(test)]
@@ -276,6 +371,34 @@ mod tests {
         assert!(markers(&out)
             .iter()
             .any(|(m, p)| *m == 0xEE && p.starts_with(b"Adobe")));
+    }
+
+    #[test]
+    fn lossy_meets_target_and_never_grows() {
+        use crate::options::Mode;
+        for (name, data) in fixtures() {
+            let lossless = optimize(&data, &Options::default()).unwrap().0;
+            for quality in [90.0f32, 80.0] {
+                let opts = Options::default()
+                    .with_mode(Mode::VisuallyLossless)
+                    .with_quality(quality);
+                let (out, desc) = optimize(&data, &opts).unwrap_or_else(|e| panic!("{name}: {e}"));
+                assert!(out.len() <= lossless.len(), "{name}: {desc}");
+                let original = decode(&data).unwrap();
+                if !matches!(original.frame.comps.len(), 1 | 3)
+                    || original.frame.width < 8
+                    || original.frame.height < 8
+                {
+                    continue;
+                }
+                let s = crate::metrics::ssimulacra2(
+                    &render::render(&original).unwrap(),
+                    &render::render(&decode(&out).unwrap()).unwrap(),
+                )
+                .unwrap();
+                assert!(s >= quality as f64, "{name} q{quality}: {s} ({desc})");
+            }
+        }
     }
 
     #[test]

@@ -231,20 +231,38 @@ fn parse_dht(
     Ok(())
 }
 
-/// Returns true if any table in the DQT payload is 16-bit.
-fn check_dqt(p: &[u8]) -> Result<bool> {
+/// Parses a DQT payload into `tables` (zigzag order). Returns true if any
+/// table is 16-bit and sets `redefined` if a table id is defined again with
+/// different values.
+fn parse_dqt(p: &[u8], tables: &mut [Option<[u16; 64]>; 4], redefined: &mut bool) -> Result<bool> {
     let mut i = 0;
     let mut wide = false;
     while i < p.len() {
-        let pq = p[i] >> 4;
-        if pq > 1 || p[i] & 15 > 3 {
+        let (pq, id) = (p[i] >> 4, (p[i] & 15) as usize);
+        if pq > 1 || id > 3 {
             return Err(malformed("invalid DQT"));
         }
+        let size = 64 * (1 + pq as usize);
+        let body = p
+            .get(i + 1..i + 1 + size)
+            .ok_or_else(|| malformed("truncated DQT"))?;
+        let mut t = [0u16; 64];
+        for (k, v) in t.iter_mut().enumerate() {
+            *v = if pq == 1 {
+                u16::from_be_bytes([body[2 * k], body[2 * k + 1]])
+            } else {
+                body[k] as u16
+            };
+        }
+        if t.contains(&0) {
+            return Err(malformed("zero quantization step"));
+        }
+        if tables[id].is_some_and(|old| old != t) {
+            *redefined = true;
+        }
+        tables[id] = Some(t);
         wide |= pq == 1;
-        i += 1 + 64 * (1 + pq as usize);
-    }
-    if i != p.len() {
-        return Err(malformed("truncated DQT"));
+        i += 1 + size;
     }
     Ok(wide)
 }
@@ -561,6 +579,8 @@ pub(crate) fn decode(data: &[u8]) -> Result<Jpeg> {
     let mut segments = Vec::new();
     let mut dqt = Vec::new();
     let mut dqt_16bit = false;
+    let mut qtables: [Option<[u16; 64]>; 4] = [None; 4];
+    let mut qtables_redefined = false;
     let mut frame: Option<Frame> = None;
     let mut coeffs: Vec<Vec<[i16; 64]>> = Vec::new();
     let mut dc: [Option<DecodeTable>; 4] = Default::default();
@@ -611,7 +631,7 @@ pub(crate) fn decode(data: &[u8]) -> Result<Jpeg> {
             }
             0xC4 => parse_dht(payload, &mut dc, &mut ac)?,
             0xDB => {
-                dqt_16bit |= check_dqt(payload)?;
+                dqt_16bit |= parse_dqt(payload, &mut qtables, &mut qtables_redefined)?;
                 dqt.push(payload.to_vec());
             }
             0xDD => {
@@ -650,6 +670,8 @@ pub(crate) fn decode(data: &[u8]) -> Result<Jpeg> {
         segments,
         dqt,
         dqt_16bit,
+        qtables,
+        qtables_redefined,
         coeffs,
         trailing: data.len() - pos,
     })
