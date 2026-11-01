@@ -723,12 +723,23 @@ mod near_lossless_tests {
             for x in 0..w {
                 let n = (next() % 9) as i32 - 4;
                 let base = [(x * 5 + y) as i32, (y * 7) as i32, ((x + y) * 3) as i32];
-                let a = if !alpha { 255 } else if (x + y) % 7 == 0 { 0 } else { (next() % 256) as u16 };
+                let a = if !alpha {
+                    255
+                } else if (x + y) % 7 == 0 {
+                    0
+                } else {
+                    (next() % 256) as u16
+                };
                 px.extend(base.iter().map(|&v| (v + n).clamp(0, 255) as u16));
                 px.push(a);
             }
         }
-        Image { width: w, height: h, bit16: false, px }
+        Image {
+            width: w,
+            height: h,
+            bit16: false,
+            px,
+        }
     }
 
     #[test]
@@ -765,7 +776,10 @@ mod near_lossless_tests {
             assert!(filter::unfilter_row(nl.filtered[start], &mut row, &prev, 3));
             for x in 0..33 {
                 let r = &nl.recon.px[(y * 33 + x) * 4..][..3];
-                assert_eq!(&row[x * 3..x * 3 + 3], &[r[0] as u8, r[1] as u8, r[2] as u8]);
+                assert_eq!(
+                    &row[x * 3..x * 3 + 3],
+                    &[r[0] as u8, r[1] as u8, r[2] as u8]
+                );
             }
             prev = row;
         }
