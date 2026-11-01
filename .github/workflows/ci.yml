@@ -49,3 +49,17 @@ jobs:
             -Ltarget/release -lprismpx -o smoke
           LD_LIBRARY_PATH=target/release ./smoke crates/prismpx/tests/fixtures/rgba8_gradient.png out.png
           PRISMPX_LOSSY=1 LD_LIBRARY_PATH=target/release ./smoke crates/prismpx/tests/fixtures/rgba8_gradient.png out2.png
+
+  jpeg-pixels:
+    # Independent check: lossless JPEG output must decode (with libjpeg via
+    # Pillow) to exactly the same pixels as the input.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install pillow
+      - run: cargo build --release -p prismpx-cli
+      - run: python3 scripts/check_jpeg_pixels.py target/release/prismpx crates/prismpx/tests/fixtures/jpeg/*.jpg
