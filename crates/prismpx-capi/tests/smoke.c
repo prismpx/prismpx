@@ -25,6 +25,11 @@ int main(int argc, char **argv) {
     PrismpxOptions *opts = prismpx_options_new();
     if (prismpx_options_set_effort(opts, 7) != PRISMPX_ERR_INVALID_ARGUMENT) return 1;
     prismpx_options_set_effort(opts, PRISMPX_EFFORT_MAX);
+    if (argc > 3 || getenv("PRISMPX_LOSSY")) {
+        if (prismpx_options_set_mode(opts, PRISMPX_MODE_VISUALLY_LOSSLESS) != PRISMPX_OK) return 1;
+        if (prismpx_options_set_quality(opts, 120.0f) != PRISMPX_ERR_INVALID_ARGUMENT) return 1;
+        prismpx_options_set_quality(opts, 85.0f);
+    }
 
     PrismpxResult *res = NULL;
     uint8_t junk[4] = {1, 2, 3, 4};

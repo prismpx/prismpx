@@ -8,6 +8,7 @@
  *    prismpx_last_error() then describes the failure (thread-local).
  *  - Passing NULL options to prismpx_optimize uses the defaults
  *    (lossless, default effort, safe metadata policy, verification on).
+ *  - ABI 2 added prismpx_options_set_mode and prismpx_options_set_quality.
  *  - Fields may be added in later versions through new setter functions;
  *    check prismpx_abi_version() if you depend on newer ones.
  */
@@ -21,7 +22,7 @@
 extern "C" {
 #endif
 
-#define PRISMPX_ABI_VERSION 1
+#define PRISMPX_ABI_VERSION 2
 
 #define PRISMPX_OK 0
 #define PRISMPX_ERR_NULL_POINTER -1
@@ -35,6 +36,9 @@ extern "C" {
 #define PRISMPX_EFFORT_FAST 0
 #define PRISMPX_EFFORT_DEFAULT 1
 #define PRISMPX_EFFORT_MAX 2
+
+#define PRISMPX_MODE_LOSSLESS 0
+#define PRISMPX_MODE_VISUALLY_LOSSLESS 1
 
 #define PRISMPX_METADATA_SAFE 0
 #define PRISMPX_METADATA_KEEP_ALL 1
@@ -53,6 +57,11 @@ int prismpx_options_set_effort(PrismpxOptions *opts, int effort);
 int prismpx_options_set_metadata(PrismpxOptions *opts, int policy);
 int prismpx_options_set_verify(PrismpxOptions *opts, int verify);
 int prismpx_options_set_clean_transparent(PrismpxOptions *opts, int clean);
+/* Since ABI 2. */
+int prismpx_options_set_mode(PrismpxOptions *opts, int mode);
+/* Minimum SSIMULACRA2 score (0..100) in visually-lossless mode; default 85.
+ * Since ABI 2. */
+int prismpx_options_set_quality(PrismpxOptions *opts, float quality);
 
 int prismpx_optimize(const uint8_t *input, size_t input_len,
                      const PrismpxOptions *opts, PrismpxResult **out);
