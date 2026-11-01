@@ -48,3 +48,4 @@ jobs:
           gcc -O2 -Wall -Wextra -Icrates/prismpx-capi/include crates/prismpx-capi/tests/smoke.c \
             -Ltarget/release -lprismpx -o smoke
           LD_LIBRARY_PATH=target/release ./smoke crates/prismpx/tests/fixtures/rgba8_gradient.png out.png
+          PRISMPX_LOSSY=1 LD_LIBRARY_PATH=target/release ./smoke crates/prismpx/tests/fixtures/rgba8_gradient.png out2.png

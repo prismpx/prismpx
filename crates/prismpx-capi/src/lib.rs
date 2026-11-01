@@ -11,9 +11,9 @@ use std::ffi::{c_char, CString};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::ptr;
 
-use prismpx::{Effort, Error, MetadataPolicy, Options};
+use prismpx::{Effort, Error, MetadataPolicy, Mode, Options};
 
-pub const PRISMPX_ABI_VERSION: u32 = 1;
+pub const PRISMPX_ABI_VERSION: u32 = 2;
 
 pub const PRISMPX_OK: i32 = 0;
 pub const PRISMPX_ERR_NULL_POINTER: i32 = -1;
@@ -108,6 +108,43 @@ pub unsafe extern "C" fn prismpx_options_set_effort(opts: *mut PrismpxOptions, e
             2 => Effort::Max,
             _ => return fail(PRISMPX_ERR_INVALID_ARGUMENT, "effort must be 0, 1 or 2"),
         };
+        PRISMPX_OK
+    })
+}
+
+/// `mode`: 0 = lossless (default), 1 = visually lossless. Since ABI 2.
+///
+/// # Safety
+/// `opts` must be a valid options handle.
+#[no_mangle]
+pub unsafe extern "C" fn prismpx_options_set_mode(opts: *mut PrismpxOptions, mode: i32) -> i32 {
+    with_options(opts, |o| {
+        o.mode = match mode {
+            0 => Mode::Lossless,
+            1 => Mode::VisuallyLossless,
+            _ => return fail(PRISMPX_ERR_INVALID_ARGUMENT, "mode must be 0 or 1"),
+        };
+        PRISMPX_OK
+    })
+}
+
+/// Minimum SSIMULACRA2 score (0..=100) for visually-lossless mode. Since ABI 2.
+///
+/// # Safety
+/// `opts` must be a valid options handle.
+#[no_mangle]
+pub unsafe extern "C" fn prismpx_options_set_quality(
+    opts: *mut PrismpxOptions,
+    quality: f32,
+) -> i32 {
+    with_options(opts, |o| {
+        if !(0.0..=100.0).contains(&quality) {
+            return fail(
+                PRISMPX_ERR_INVALID_ARGUMENT,
+                "quality must be within 0..=100",
+            );
+        }
+        o.quality = quality;
         PRISMPX_OK
     })
 }

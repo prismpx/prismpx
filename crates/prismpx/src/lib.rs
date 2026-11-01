@@ -10,17 +10,22 @@
 //! std::fs::write("out.png", &result.data).unwrap();
 //! ```
 //!
-//! Status: PNG lossless is implemented. JPEG and visually-lossless modes return
+//! [`Mode::VisuallyLossless`] trades invisible changes for much smaller files,
+//! guided by the SSIMULACRA2 perceptual metric (see [`metrics`]).
+//!
+//! Status: PNG is implemented in both modes. JPEG returns
 //! [`Error::Unsupported`] for now.
 
 mod checksum;
+mod color;
 pub mod deflate;
 mod error;
+pub mod metrics;
 mod options;
 pub mod png;
 
 pub use error::{Error, Result};
-pub use options::{Effort, MetadataPolicy, Mode, Options};
+pub use options::{Effort, MetadataPolicy, Mode, Options, DEFAULT_QUALITY};
 
 /// Image container formats prismpx recognizes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,11 +83,6 @@ impl Optimized {
 /// original bytes are returned with `optimized == false`.
 pub fn optimize(input: &[u8], opts: &Options) -> Result<Optimized> {
     let format = detect_format(input).ok_or(Error::UnsupportedFormat)?;
-    if opts.mode != Mode::Lossless {
-        return Err(Error::Unsupported(
-            "visually-lossless mode is not implemented yet".into(),
-        ));
-    }
     let (data, strategy) = match format {
         Format::Png => png::optimize(input, opts)?,
         Format::Jpeg => {

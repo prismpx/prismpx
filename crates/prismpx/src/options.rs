@@ -4,8 +4,8 @@ pub enum Mode {
     /// Every pixel decodes to exactly the same value.
     #[default]
     Lossless,
-    /// Pixels may change as long as the difference is not visible.
-    /// Not implemented yet.
+    /// Pixels may change, as long as the SSIMULACRA2 score against the
+    /// original stays at or above [`Options::quality`]. PNG only for now.
     VisuallyLossless,
 }
 
@@ -31,7 +31,7 @@ pub enum MetadataPolicy {
     ColorOnly,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Options {
     pub mode: Mode,
     pub effort: Effort,
@@ -41,7 +41,14 @@ pub struct Options {
     /// Zero the color of fully transparent pixels. Invisible on screen, but it
     /// changes stored pixel values, so it is off by default.
     pub clean_transparent: bool,
+    /// Minimum SSIMULACRA2 score for [`Mode::VisuallyLossless`].
+    /// 90: visually lossless, 85: indistinguishable in a flip test at 1:1,
+    /// 80: indistinguishable side by side, 70: high quality.
+    pub quality: f32,
 }
+
+/// Default SSIMULACRA2 target for [`Mode::VisuallyLossless`].
+pub const DEFAULT_QUALITY: f32 = 85.0;
 
 impl Default for Options {
     fn default() -> Self {
@@ -51,11 +58,23 @@ impl Default for Options {
             metadata: MetadataPolicy::Safe,
             verify: true,
             clean_transparent: false,
+            quality: DEFAULT_QUALITY,
         }
     }
 }
 
 impl Options {
+    pub fn with_mode(mut self, mode: Mode) -> Self {
+        self.mode = mode;
+        self
+    }
+
+    /// Sets the SSIMULACRA2 target for [`Mode::VisuallyLossless`].
+    pub fn with_quality(mut self, quality: f32) -> Self {
+        self.quality = quality;
+        self
+    }
+
     pub fn with_effort(mut self, effort: Effort) -> Self {
         self.effort = effort;
         self

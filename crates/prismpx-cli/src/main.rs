@@ -2,24 +2,28 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::Instant;
 
-use prismpx::{Effort, MetadataPolicy, Options};
+use prismpx::{Effort, MetadataPolicy, Mode, Options, DEFAULT_QUALITY};
 
 const HELP: &str = "\
 prismpx - make images smaller without changing them
 
 USAGE:
     prismpx [OPTIONS] <FILE>...
+    prismpx score <ORIGINAL> <DISTORTED>   Print the SSIMULACRA2 score (PNG inputs)
 
 Without --output or --in-place, runs as a dry run and only reports savings.
 
 OPTIONS:
     -o, --output <PATH>     Write the result to PATH (single input only)
         --in-place          Overwrite inputs that got smaller
+    -l, --lossy             Allow invisible changes for much smaller files
+    -q, --quality <SCORE>   Minimum SSIMULACRA2 score with --lossy [default: QUALITY]
+                            90 visually lossless, 85 excellent, 80 very high
     -e, --effort <LEVEL>    fast | default | max            [default: default]
     -m, --metadata <MODE>   safe | keep-all | color-only     [default: safe]
         --clean-transparent Zero the color of fully transparent pixels
         --no-verify         Skip decoding the output to check it
-    -q, --quiet             Only print errors
+        --quiet             Only print errors
     -h, --help              Print help
     -V, --version           Print version
 ";
@@ -45,7 +49,7 @@ fn parse_args() -> Result<Option<Args>, String> {
         let mut value = |name: &str| it.next().ok_or_else(|| format!("{name} needs a value"));
         match a.as_str() {
             "-h" | "--help" => {
-                print!("{HELP}");
+                print!("{}", HELP.replace("QUALITY", &DEFAULT_QUALITY.to_string()));
                 return Ok(None);
             }
             "-V" | "--version" => {
@@ -54,7 +58,16 @@ fn parse_args() -> Result<Option<Args>, String> {
             }
             "-o" | "--output" => args.output = Some(value(&a)?.into()),
             "--in-place" => args.in_place = true,
-            "-q" | "--quiet" => args.quiet = true,
+            "--quiet" => args.quiet = true,
+            "-l" | "--lossy" => args.opts.mode = Mode::VisuallyLossless,
+            "-q" | "--quality" => {
+                let v = value(&a)?;
+                args.opts.quality = v
+                    .parse::<f32>()
+                    .ok()
+                    .filter(|q| (0.0..=100.0).contains(q))
+                    .ok_or_else(|| format!("quality must be a number from 0 to 100, got '{v}'"))?;
+            }
             "--no-verify" => args.opts.verify = false,
             "--clean-transparent" => args.opts.clean_transparent = true,
             "-e" | "--effort" => {
@@ -123,7 +136,39 @@ fn process(path: &Path, args: &Args) -> Result<(usize, usize), String> {
     Ok((input.len(), r.size()))
 }
 
+/// `prismpx score <original> <distorted>`: prints the SSIMULACRA2 score.
+fn score_command(files: &[String]) -> ExitCode {
+    if files.len() != 2 {
+        eprintln!("usage: prismpx score <original.png> <distorted.png>");
+        return ExitCode::from(2);
+    }
+    let load = |p: &str| -> Result<prismpx::png::Image, String> {
+        let data = std::fs::read(p).map_err(|e| format!("{p}: {e}"))?;
+        prismpx::png::decode(&data).map_err(|e| format!("{p}: {e}"))
+    };
+    match (load(&files[0]), load(&files[1])) {
+        (Ok(a), Ok(b)) => match prismpx::metrics::ssimulacra2(&a, &b) {
+            Ok(s) => {
+                println!("{s:.8}");
+                ExitCode::SUCCESS
+            }
+            Err(e) => {
+                eprintln!("error: {e}");
+                ExitCode::FAILURE
+            }
+        },
+        (Err(e), _) | (_, Err(e)) => {
+            eprintln!("error: {e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
 fn main() -> ExitCode {
+    let raw: Vec<String> = std::env::args().skip(1).collect();
+    if raw.first().map(String::as_str) == Some("score") {
+        return score_command(&raw[1..]);
+    }
     let args = match parse_args() {
         Ok(Some(a)) => a,
         Ok(None) => return ExitCode::SUCCESS,

@@ -145,3 +145,32 @@ fn keeps_original_when_nothing_helps() {
     let twice = optimize(&once.data, &Options::default()).unwrap();
     assert!(twice.size() <= once.size());
 }
+
+#[test]
+fn visually_lossless_meets_target_and_beats_lossless() {
+    use prismpx::{metrics::ssimulacra2, Mode};
+    for (name, data, _) in fixtures() {
+        let original = png::decode(&data).unwrap();
+        if original.width < 8 || original.height < 8 {
+            continue;
+        }
+        let lossless = optimize(&data, &Options::default()).unwrap();
+        for quality in [90.0f32, 80.0] {
+            let opts = Options::default()
+                .with_mode(Mode::VisuallyLossless)
+                .with_quality(quality);
+            let r = optimize(&data, &opts).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert!(
+                r.size() <= lossless.size(),
+                "{name}: lossy larger than lossless"
+            );
+            let out = png::decode(&r.data).unwrap();
+            let score = ssimulacra2(&original, &out).unwrap();
+            assert!(
+                score >= quality as f64 - 1e-9,
+                "{name} q{quality}: score {score} ({})",
+                r.strategy
+            );
+        }
+    }
+}
