@@ -20,9 +20,9 @@ It is written in dependency-free Rust with a C ABI, so it can be wrapped for any
 |---|---|---|
 | original | 2.86 MB | |
 | lossless | 2.47 MB | 13.7% |
-| `--lossy -q 90` (visually lossless) | 2.23 MB | 22.1% |
-| `--lossy -q 85` (default; indistinguishable in a flip test) | 1.75 MB | 38.7% |
-| `--lossy -q 80` (indistinguishable side by side) | 0.90 MB | 68.6% |
+| `--lossy -q 90` (visually lossless) | 1.66 MB | 42.2% |
+| `--lossy -q 85` (default; indistinguishable in a flip test) | 1.06 MB | 63.1% |
+| `--lossy -q 80` (indistinguishable side by side) | 0.78 MB | 72.6% |
 
 Every lossy output met its SSIMULACRA 2 target.
 
@@ -48,6 +48,7 @@ Animated PNG (APNG) is detected and left untouched for now.
 | Palette | variance-minimizing median cut (after Wu, 1991) in premultiplied OKLab + alpha, refined with weighted k-means |
 | Dithering | serpentine Floyd–Steinberg whose strength fades out on edges and texture, so gradients stay smooth without dither noise that hurts compression; dithered and undithered remaps are both scored |
 | Search | binary search over palette sizes (2–256) for the smallest palette meeting the target; 16-bit images also try plain 8-bit |
+| Near-lossless | JPEG-LS-style bounded-error coding (Weinberger et al., LOCO-I, 2000) inside PNG's filter loop: each filter residual is quantized to a multiple of 2δ+1 while the encoder tracks the reconstruction, so every sample decodes within ±δ of the original and residuals compress far better. Alpha stays exact; color under fully transparent pixels is free. Binary search picks the largest δ that meets the target. Output is a standard PNG. |
 | Encoding | every candidate goes through the lossless pipeline; the smallest file wins, and the lossless result is kept if nothing beats it |
 
 ## Usage
@@ -121,9 +122,8 @@ by an independent Python encoder, not by prismpx itself.
 
 ## Roadmap
 
-- PNG near-lossless: JPEG-LS-style residual quantization with a per-pixel error
-  bound, for photos that palettes cannot represent at high quality
-- PNG: Zopfli-style optimal LZ77 parsing; faster perceptual search
+- PNG: Zopfli-style optimal LZ77 parsing; faster perceptual search; rate-aware
+  residual selection in near-lossless mode
 - JPEG lossless: marker cleanup, optimal Huffman tables, progressive scan search
 - JPEG visually lossless: trellis quantization, perceptual quantization tables,
   DCT-domain requantization
