@@ -174,3 +174,19 @@ fn visually_lossless_meets_target_and_beats_lossless() {
         }
     }
 }
+
+#[test]
+fn jpeg_is_optimized_through_the_public_api() {
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/jpeg");
+    let data = fs::read(dir.join("baseline_420_q75.jpg")).unwrap();
+    let r = optimize(&data, &Options::default()).unwrap();
+    assert_eq!(r.format, prismpx::Format::Jpeg);
+    assert!(r.optimized && r.size() < data.len(), "{}", r.strategy);
+    // Visually-lossless mode falls back to lossless JPEG optimization for now.
+    let v = optimize(
+        &data,
+        &Options::default().with_mode(prismpx::Mode::VisuallyLossless),
+    )
+    .unwrap();
+    assert_eq!(v.data, r.data);
+}

@@ -13,13 +13,14 @@
 //! [`Mode::VisuallyLossless`] trades invisible changes for much smaller files,
 //! guided by the SSIMULACRA2 perceptual metric (see [`metrics`]).
 //!
-//! Status: PNG is implemented in both modes. JPEG returns
-//! [`Error::Unsupported`] for now.
+//! Status: PNG is implemented in both modes; JPEG is optimized losslessly
+//! (in visually-lossless mode too, for now).
 
 mod checksum;
 mod color;
 pub mod deflate;
 mod error;
+mod jpeg;
 pub mod metrics;
 mod options;
 pub mod png;
@@ -85,11 +86,7 @@ pub fn optimize(input: &[u8], opts: &Options) -> Result<Optimized> {
     let format = detect_format(input).ok_or(Error::UnsupportedFormat)?;
     let (data, strategy) = match format {
         Format::Png => png::optimize(input, opts)?,
-        Format::Jpeg => {
-            return Err(Error::Unsupported(
-                "JPEG optimization is not implemented yet".into(),
-            ))
-        }
+        Format::Jpeg => jpeg::optimize(input, opts)?,
     };
     if data.len() < input.len() {
         Ok(Optimized {
