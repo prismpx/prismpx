@@ -73,11 +73,22 @@ def which(*names):
     return all(shutil.which(n) for n in names)
 
 
+def find_bin(directory, name):
+    """mozjpeg names its executables `name` or `name-static` depending on build options."""
+    if not directory:
+        return None
+    for candidate in (name, name + "-static"):
+        path = os.path.join(directory, candidate)
+        if os.path.exists(path):
+            return path
+    return None
+
+
 def tools(prismpx, mozjpeg_bin):
-    moz_tran = os.path.join(mozjpeg_bin, "jpegtran") if mozjpeg_bin else None
-    moz_cjpeg = os.path.join(mozjpeg_bin, "cjpeg") if mozjpeg_bin else None
-    moz_djpeg = os.path.join(mozjpeg_bin, "djpeg") if mozjpeg_bin else None
-    have_moz = moz_tran and os.path.exists(moz_tran)
+    moz_tran = find_bin(mozjpeg_bin, "jpegtran")
+    moz_cjpeg = find_bin(mozjpeg_bin, "cjpeg")
+    moz_djpeg = find_bin(mozjpeg_bin, "djpeg")
+    have_moz = bool(moz_tran and moz_cjpeg and moz_djpeg)
     t = [
         # (name, corpus kind, lossy?, available?, command(input, output))
         ("prismpx", "png", False, True, lambda i, o: [prismpx, "--quiet", "-o", o, i]),

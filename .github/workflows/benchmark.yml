@@ -35,6 +35,7 @@ jobs:
           cmake -S /tmp/mozjpeg -B /tmp/mozjpeg/build -DCMAKE_BUILD_TYPE=Release -DPNG_SUPPORTED=OFF \
             -DENABLE_SHARED=OFF -DENABLE_STATIC=ON -DCMAKE_POSITION_INDEPENDENT_CODE=ON
           cmake --build /tmp/mozjpeg/build -j4
+          ls /tmp/mozjpeg/build | grep -E "jpeg|tran" || true
       - run: cargo build --release -p prismpx-cli
       - name: Run benchmark
         run: |
