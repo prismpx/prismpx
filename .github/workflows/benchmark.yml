@@ -29,9 +29,11 @@ jobs:
           cargo install oxipng --locked
           pip install pillow
       - name: Build mozjpeg
+        continue-on-error: true
         run: |
-          git clone --depth 1 https://github.com/mozilla/mozjpeg /tmp/mozjpeg
-          cmake -S /tmp/mozjpeg -B /tmp/mozjpeg/build -DCMAKE_BUILD_TYPE=Release -DPNG_SUPPORTED=OFF
+          git clone --depth 1 --branch v4.1.5 https://github.com/mozilla/mozjpeg /tmp/mozjpeg
+          cmake -S /tmp/mozjpeg -B /tmp/mozjpeg/build -DCMAKE_BUILD_TYPE=Release -DPNG_SUPPORTED=OFF \
+            -DENABLE_SHARED=OFF -DENABLE_STATIC=ON -DCMAKE_POSITION_INDEPENDENT_CODE=ON
           cmake --build /tmp/mozjpeg/build -j4
       - run: cargo build --release -p prismpx-cli
       - name: Run benchmark
@@ -40,7 +42,7 @@ jobs:
             --mozjpeg-bin /tmp/mozjpeg/build > report.md
           {
             echo ""
-            echo "<sub>Tool versions: $(oxipng --version | head -1), $(optipng -v | head -1), pngquant $(pngquant --version), $(jpegoptim --version | head -1), libjpeg-turbo jpegtran $(dpkg-query -W -f='${Version}' libjpeg-turbo-progs), mozjpeg $(git -C /tmp/mozjpeg rev-parse --short HEAD). Runner: ${{ runner.os }} ${{ runner.arch }}.</sub>"
+            echo "<sub>Tool versions: $(oxipng --version | head -1), $(optipng -v | head -1), pngquant $(pngquant --version), $(jpegoptim --version | head -1), libjpeg-turbo jpegtran $(dpkg-query -W -f='${Version}' libjpeg-turbo-progs), mozjpeg $(git -C /tmp/mozjpeg describe --tags 2>/dev/null || echo unavailable). Runner: ${{ runner.os }} ${{ runner.arch }}.</sub>"
           } >> report.md
           cat report.md >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
