@@ -172,6 +172,8 @@ fn encode_verified(
 const MAX_STRENGTH: f32 = 4.0;
 /// Chroma table scaling relative to luma, for 4:4:4 images.
 const CHROMA_444: f32 = 2.5;
+/// Safety margin added to the JPEG score target (see `optimize`).
+const SCORE_MARGIN: f64 = 0.5;
 /// Bisection steps for the strength search (resolution MAX_STRENGTH / 2^steps).
 const SEARCH_STEPS: usize = 6;
 
@@ -209,7 +211,9 @@ pub(crate) fn optimize(input: &[u8], opts: &Options) -> Result<(Vec<u8>, String)
 
     let original = render::render(&jpeg)?;
     let reference = Reference::new(&original)?;
-    let target = opts.quality as f64;
+    // Search slightly above the target: our renderer differs from libjpeg by a
+    // level or two, and the result should meet the target in other decoders too.
+    let target = opts.quality as f64 + SCORE_MARGIN;
     let score = |cand: &Jpeg| -> Result<f64> { reference.score(&render::render(cand)?) };
     let full_chroma =
         jpeg.frame.comps.len() == 3 && jpeg.frame.comps.iter().all(|c| c.h == 1 && c.v == 1);
@@ -250,9 +254,10 @@ pub(crate) fn optimize(input: &[u8], opts: &Options) -> Result<(Vec<u8>, String)
             best = (
                 bytes,
                 format!(
-                    "jpeg: {} -> {layout}, optimized Huffman tables{}; lossy: perceptual requantization (strength {strength:.2}){rdo}, ssimulacra2={s:.2} (target {target})",
+                    "jpeg: {} -> {layout}, optimized Huffman tables{}; lossy: perceptual requantization (strength {strength:.2}){rdo}, ssimulacra2={s:.2} (target {})",
                     jpeg.frame.describe(),
                     if meta_note.is_empty() { String::new() } else { format!(", {meta_note}") },
+                    opts.quality,
                 ),
             );
         }

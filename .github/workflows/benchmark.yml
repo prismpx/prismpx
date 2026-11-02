@@ -1,0 +1,57 @@
+name: Benchmark
+
+# Compares prismpx with other optimizers on public corpora.
+# Run manually, or automatically when the benchmark itself changes in a PR.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - scripts/bench_compare.py
+      - .github/workflows/benchmark.yml
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install comparison tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y optipng pngquant zopfli jpegoptim libjpeg-turbo-progs cmake nasm
+          cargo install oxipng --locked
+          pip install pillow
+      - name: Build mozjpeg
+        continue-on-error: true
+        run: |
+          git clone --depth 1 --branch v4.1.5 https://github.com/mozilla/mozjpeg /tmp/mozjpeg
+          cmake -S /tmp/mozjpeg -B /tmp/mozjpeg/build -DCMAKE_BUILD_TYPE=Release -DPNG_SUPPORTED=OFF \
+            -DENABLE_SHARED=OFF -DENABLE_STATIC=ON -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+          cmake --build /tmp/mozjpeg/build -j4
+          ls /tmp/mozjpeg/build | grep -E "jpeg|tran" || true
+      - run: cargo build --release -p prismpx-cli
+      - name: Run benchmark
+        run: |
+          python3 scripts/bench_compare.py --prismpx target/release/prismpx \
+            --mozjpeg-bin /tmp/mozjpeg/build > report.md
+          {
+            echo ""
+            echo "<sub>Tool versions: $(oxipng --version | head -1), $(optipng -v | head -1), pngquant $(pngquant --version), $(jpegoptim --version | head -1), libjpeg-turbo jpegtran $(dpkg-query -W -f='${Version}' libjpeg-turbo-progs), mozjpeg $(git -C /tmp/mozjpeg describe --tags 2>/dev/null || echo unavailable). Runner: ${{ runner.os }} ${{ runner.arch }}.</sub>"
+          } >> report.md
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-report
+          path: report.md
+      - name: Comment on PR
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr comment ${{ github.event.pull_request.number }} --body-file report.md
