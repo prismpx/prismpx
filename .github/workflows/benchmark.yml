@@ -1,0 +1,54 @@
+name: Benchmark
+
+# Compares prismpx with other optimizers on public corpora.
+# Run manually, or automatically when the benchmark itself changes in a PR.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - scripts/bench_compare.py
+      - .github/workflows/benchmark.yml
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install comparison tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y optipng pngquant zopfli jpegoptim libjpeg-turbo-progs cmake nasm
+          cargo install oxipng --locked
+          pip install pillow
+      - name: Build mozjpeg
+        run: |
+          git clone --depth 1 https://github.com/mozilla/mozjpeg /tmp/mozjpeg
+          cmake -S /tmp/mozjpeg -B /tmp/mozjpeg/build -DCMAKE_BUILD_TYPE=Release -DPNG_SUPPORTED=OFF
+          cmake --build /tmp/mozjpeg/build -j4
+      - run: cargo build --release -p prismpx-cli
+      - name: Run benchmark
+        run: |
+          python3 scripts/bench_compare.py --prismpx target/release/prismpx \
+            --mozjpeg-bin /tmp/mozjpeg/build > report.md
+          {
+            echo ""
+            echo "<sub>Tool versions: $(oxipng --version | head -1), $(optipng -v | head -1), pngquant $(pngquant --version), $(jpegoptim --version | head -1), libjpeg-turbo jpegtran $(dpkg-query -W -f='${Version}' libjpeg-turbo-progs), mozjpeg $(git -C /tmp/mozjpeg rev-parse --short HEAD). Runner: ${{ runner.os }} ${{ runner.arch }}.</sub>"
+          } >> report.md
+          cat report.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-report
+          path: report.md
+      - name: Comment on PR
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr comment ${{ github.event.pull_request.number }} --body-file report.md
