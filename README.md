@@ -1,46 +1,106 @@
 # prismpx
 
+[![CI](https://github.com/prismpx/prismpx/actions/workflows/ci.yml/badge.svg)](https://github.com/prismpx/prismpx/actions/workflows/ci.yml)
+
 **Make images smaller without changing how they look.**
 
 prismpx is a same-format image optimizer: a PNG or JPEG goes in, a smaller file of the same format comes out.
 
 - **Lossless mode** (default): every pixel decodes to exactly the same value.
 - **Visually-lossless mode** (`--lossy`): pixels may change, but only as far as a
-  perceptual metric (SSIMULACRA 2) says is invisible at the chosen quality.
+  perceptual metric ([SSIMULACRA 2](https://github.com/cloudinary/ssimulacra2)) says is
+  invisible at the chosen quality. Every lossy result is checked against that target.
 
 It is written in dependency-free Rust with a C ABI, so it can be wrapped for any language.
 
-> Status: early. PNG and JPEG work in both modes. See the [roadmap](#roadmap).
+> Status: early. PNG and JPEG work in both modes. See [how it compares](#how-it-compares)
+> for where it is ahead and where it is still behind.
 
-## Results
+## Examples
 
-20 real-world PNGs (photos, UI, textures), total size:
+Crops at 2× zoom, default settings (`--lossy`, quality 85).
 
-| Mode | Size | Saved |
+**Photo saved as PNG**: near-lossless coding, every pixel within ±δ of the original.
+![Hubble deep field PNG: 1641 KB original vs 705 KB with prismpx --lossy](docs/images/png-photo.png)
+
+**UI screenshot (PNG)**: perceptual palette with edge-aware dithering.
+![UI screenshot PNG: 16 KB original vs 8 KB with prismpx --lossy](docs/images/png-ui.png)
+
+**Photo (JPEG, saved at quality 95)**: requantized in the DCT domain, with no second round of JPEG artifacts.
+![Rocket launch JPEG: 72 KB original vs 53 KB with prismpx --lossy](docs/images/jpeg-photo.png)
+
+<sub>Images: NASA/Hubble and SpaceX, both public domain. Regenerate with
+`scripts/make_readme_images.py`.</sub>
+
+## How it compares
+
+Measured by the [benchmark workflow](.github/workflows/benchmark.yml)
+([`scripts/bench_compare.py`](scripts/bench_compare.py)) on GitHub's Linux runners.
+Lossy results are scored with SSIMULACRA 2 against the input (mean / worst image).
+For reference, 90 is visually lossless and 80 is indistinguishable side by side.
+
+**PNG photos**: Kodak set, 24 images, 15.39 MB
+
+| Tool | Saved | Quality (mean / min) |
 |---|---|---|
-| original | 2.86 MB | |
-| lossless | 2.47 MB | 13.7% |
-| `--lossy -q 90` (visually lossless) | 1.66 MB | 42.2% |
-| `--lossy -q 85` (default; indistinguishable in a flip test) | 1.06 MB | 63.1% |
-| `--lossy -q 80` (indistinguishable side by side) | 0.78 MB | 72.6% |
+| oxipng `-o max` | 4.9% | lossless |
+| zopflipng | 3.8% | lossless |
+| optipng `-o7` | 0.5% | lossless |
+| prismpx `-e max` | 0.3% | lossless |
+| pngquant (default) | 60.8% | 81.5 / **74.4** |
+| prismpx `--lossy` (q85) | 55.5% | 86.8 / 85.2 |
+| prismpx `--lossy -q 80` | **67.5%** | 81.7 / **80.1** |
 
-Every lossy output met its SSIMULACRA 2 target.
+**PNG graphics**: synthetic UI screenshots, 8 images (half with alpha)
 
-40 real-world JPEGs (3.63 MB, already web-compressed):
+| Tool | Saved | Quality (mean / min) |
+|---|---|---|
+| zopflipng | 26.8% | lossless |
+| oxipng `-o max` | 26.2% | lossless |
+| optipng `-o7` | 23.1% | lossless |
+| prismpx `-e max` | 19.5% | lossless |
+| pngquant (default) | **65.0%** | **92.9 / 91.4** |
+| prismpx `--lossy` (q85) | 62.7% | 86.4 / 85.5 |
 
-| Mode | Saved |
-|---|---|
-| lossless (pixel-identical under libjpeg) | 8.0% |
-| `--lossy -q 90` | 11.0% |
-| `--lossy -q 85` (default) | 21.6% |
-| `--lossy -q 80` | 32.1% |
+**JPEG photos**: Kodak set saved at quality 90, 24 images, 2.77 MB
 
-High-quality sources save more: five photos saved at JPEG quality 95 shrink by
-31.4% at `-q 85`. JPEG scores compare against the decoded input, so an
-already heavily compressed JPEG may have no headroom; it is then optimized
-losslessly.
+| Tool | Saved | Quality (mean / min) |
+|---|---|---|
+| jpegtran (mozjpeg) | 6.2% | lossless |
+| jpegtran (libjpeg-turbo) `-optimize -progressive` | 5.9% | lossless |
+| prismpx | 3.8% | lossless |
+| jpegoptim `--strip-all` | 1.3% | lossless |
+| jpegoptim `-m85` | 12.6% | 85.2 / 81.6 |
+| prismpx `--lossy` (q85) | 12.2% | 85.4 / **85.0** |
+| mozjpeg `cjpeg -quality 85` (re-encode) | **30.8%** | 80.5 / 77.9 |
+| prismpx `--lossy -q 80` | 25.0% | 80.5 / 79.2 |
 
-## What it does (PNG)
+### Where prismpx is ahead
+- **Lossy photos in PNG.** At `-q 80`, the output is 17% smaller than pngquant's and its
+  worst image scores 80.1 against pngquant's 74.4. The near-lossless mode keeps true color
+  where a 256-color palette shows banding.
+- **A guaranteed quality floor.** The quality target is enforced per image. Fixed-setting
+  tools vary: pngquant's worst Kodak image scores 74.4, jpegoptim `-m85`'s 81.6 and mozjpeg's 77.9.
+- **One tool, one API** for PNG and JPEG, in both lossless and perceptual modes, with no dependencies.
+
+### Where it is behind (and what is planned)
+- **Lossless PNG**: the built-in DEFLATE encoder is roughly at zlib -9. oxipng and zopflipng
+  save 3–7 percentage points more ([#7](https://github.com/prismpx/prismpx/issues/7): Zopfli-style optimal parsing).
+- **Lossless JPEG**: about 2 percentage points behind jpegtran, because successive-approximation scans are not used yet
+  ([#6](https://github.com/prismpx/prismpx/issues/6)).
+- **Lossy JPEG at equal quality**: mozjpeg's trellis quantization produces smaller files at
+  the same mean score ([#5](https://github.com/prismpx/prismpx/issues/5): full trellis with a Huffman rate model).
+- **Palette PNGs**: pngquant reaches higher quality at a similar size on flat UI graphics.
+- **Speed**: the perceptual search takes about 1–3 s per image ([#8](https://github.com/prismpx/prismpx/issues/8)).
+
+<sub>Tool versions: oxipng 10.2.1, OptiPNG 0.7.8, pngquant 2.18.0, jpegoptim 1.4.7,
+libjpeg-turbo 2.1.5, mozjpeg 4.1.5. The Kodak images are downloaded at run time and are not
+part of this repository.</sub>
+
+## How it works
+
+<details>
+<summary><b>PNG, lossless</b></summary>
 
 | Step | Technique |
 |---|---|
@@ -54,7 +114,24 @@ losslessly.
 
 Animated PNG (APNG) is detected and left untouched for now.
 
-## What it does (JPEG, lossless)
+</details>
+
+<details>
+<summary><b>PNG, visually lossless</b></summary>
+
+| Step | Technique |
+|---|---|
+| Quality control | [SSIMULACRA 2](https://github.com/cloudinary/ssimulacra2) (Sneyers, 2023), ported from the libjxl reference implementation. Candidates below the target score are rejected. |
+| Palette | variance-minimizing median cut (after Wu, 1991) in premultiplied OKLab + alpha, refined with weighted k-means |
+| Dithering | serpentine Floyd–Steinberg whose strength fades out on edges and texture, so gradients stay smooth without dither noise that hurts compression; dithered and undithered remaps are both scored |
+| Search | binary search over palette sizes (2–256) for the smallest palette meeting the target; 16-bit images also try plain 8-bit |
+| Near-lossless | JPEG-LS-style bounded-error coding (Weinberger et al., LOCO-I, 2000) inside PNG's filter loop: each filter residual is quantized to a multiple of 2δ+1 while the encoder tracks the reconstruction, so every sample decodes within ±δ of the original and residuals compress far better. Alpha stays exact; color under fully transparent pixels is free. Binary search picks the largest δ that meets the target. Output is a standard PNG. |
+| Encoding | every candidate goes through the lossless pipeline; the smallest file wins, and the lossless result is kept if nothing beats it |
+
+</details>
+
+<details>
+<summary><b>JPEG, lossless</b></summary>
 
 | Step | Technique |
 |---|---|
@@ -66,7 +143,10 @@ Animated PNG (APNG) is detected and left untouched for now.
 
 Arithmetic-coded, lossless (SOF3), hierarchical and 12-bit JPEGs are reported as unsupported.
 
-## What it does (JPEG, visually lossless)
+</details>
+
+<details>
+<summary><b>JPEG, visually lossless</b></summary>
 
 | Step | Technique |
 |---|---|
@@ -78,16 +158,7 @@ Arithmetic-coded, lossless (SOF3), hierarchical and 12-bit JPEGs are reported as
 
 CMYK/YCCK JPEGs and files that redefine quantization tables mid-stream are optimized losslessly only.
 
-## What it does (PNG, visually lossless)
-
-| Step | Technique |
-|---|---|
-| Quality control | [SSIMULACRA 2](https://github.com/cloudinary/ssimulacra2) (Sneyers, 2023), ported from the libjxl reference implementation. Candidates below the target score are rejected. |
-| Palette | variance-minimizing median cut (after Wu, 1991) in premultiplied OKLab + alpha, refined with weighted k-means |
-| Dithering | serpentine Floyd–Steinberg whose strength fades out on edges and texture, so gradients stay smooth without dither noise that hurts compression; dithered and undithered remaps are both scored |
-| Search | binary search over palette sizes (2–256) for the smallest palette meeting the target; 16-bit images also try plain 8-bit |
-| Near-lossless | JPEG-LS-style bounded-error coding (Weinberger et al., LOCO-I, 2000) inside PNG's filter loop: each filter residual is quantized to a multiple of 2δ+1 while the encoder tracks the reconstruction, so every sample decodes within ±δ of the original and residuals compress far better. Alpha stays exact; color under fully transparent pixels is free. Binary search picks the largest δ that meets the target. Output is a standard PNG. |
-| Encoding | every candidate goes through the lossless pipeline; the smallest file wins, and the lossless result is kept if nothing beats it |
+</details>
 
 ## Usage
 
@@ -145,7 +216,8 @@ crates/
     tests/        fixture tests (fixtures generated by scripts/gen_fixtures.py)
   prismpx-capi/   C ABI (cdylib + staticlib) and header
   prismpx-cli/    `prismpx` command-line tool
-scripts/          fixture generators and an independent libjpeg pixel check
+scripts/          fixture generators, libjpeg pixel check, benchmark, README images
+docs/images/      README examples
 ```
 
 ## Testing
@@ -163,12 +235,12 @@ by an independent Python encoder, not by prismpx itself.
 
 ## Roadmap
 
-- PNG: Zopfli-style optimal LZ77 parsing; faster perceptual search; rate-aware
-  residual selection in near-lossless mode
-- JPEG lossless: progressive scans with successive approximation (mozjpeg-style scan search)
-- JPEG visually lossless: full trellis quantization with a real rate model; faster search
-- WebP
-- Bindings: Java, Python, Node, WASM, Swift/Kotlin
+- [#7](https://github.com/prismpx/prismpx/issues/7) PNG: Zopfli-style optimal LZ77 parsing
+- [#6](https://github.com/prismpx/prismpx/issues/6) JPEG lossless: successive-approximation scans
+- [#5](https://github.com/prismpx/prismpx/issues/5) JPEG visually lossless: full trellis quantization
+- [#8](https://github.com/prismpx/prismpx/issues/8) Faster perceptual search
+- [#9](https://github.com/prismpx/prismpx/issues/9) Score-by-score validation against the libjxl SSIMULACRA 2 tool
+- [#16](https://github.com/prismpx/prismpx/issues/16) Language bindings: Python, Java/Kotlin, Node.js + WASM, Swift, Go, .NET
 
 ## License
 
